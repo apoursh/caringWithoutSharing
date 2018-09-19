@@ -88,36 +88,9 @@ class DO(object):
     self.p = c
     return c
 
-#  def run_logistic(self, PCA_correct=False, num_cores=1, **kwd):
-#    def _logistic_regression(val):
-#      val = add_constant(val)
-#      fit = smf.Logit(status, val).fit(disp=0)
-#      pval = fit.pvalues
-#      betas = fit.params
-#      return pval, betas
-#
-#    def _snp_generator(f, chrom):
-#      group = f[chrom]
-#      for snp in group:
-#        dset = group[snp]
-#        yield dset.value
-#
-#    with Pool(num_cores) as pool:
-#      with h5py.File(self.store_name, 'a', libver='latest') as writefp, \
-#          h5py.File(self.store_name, 'r', swmr=True, libver='latest') as f:
-#        status = f['meta/Status'].value
-#        status[100:400] = 1 #TODO get rid of this line
-#        for chrom in f.keys():
-#          if chrom == 'meta':
-#            continue
-#          generator = _snp_generator(f, chrom)
-#          logging.info("--Regression for Chromosome {}".format(chrom))
-#          vals = pool.map(_logistic_regression, generator, chunksize=2)
-#          writefp['meta'].require_dataset('Centralized_' + chrom, (len(vals),),
-#              dtype=np.float32)
-#
 
   def likelihood(self, beta, verbose=False):
+    """log loss. If beta is a matrix. Verbose refers to when beta is a matrix and not just a vector"""
     y_model= 1.0 / (1 + np.exp(-self.X.dot(beta)))
     if not verbose:
       return log_loss((self.current_Y+1)/2, y_model, normalize=False, labels=[0,1])
@@ -394,7 +367,9 @@ class DO(object):
       f.visititems(__compute_AF)
       self.has_local_AF = True
       f.attrs['has_local_AF'] = True
+
   def impute(self):
+    """Use after centering the data. This simply replaces Nan's with 0"""
     def _imputer(name, node):
       if isinstance(node, h5py.Dataset) and node.parent.name != '/meta':
         vals = node.value
@@ -405,42 +380,11 @@ class DO(object):
     with h5py.File(self.store_name, 'a') as f: 
       f.visititems(_imputer)
 
-#  def normalize(self):
-#    """Normalizes the data. mean zero, variance 1
-#    if a data center is associated with the DO uses the overall
-#    data to normalize, otherwise normalizes based on the data present
-#    """
-#    def __normalize_centralized(name, node):
-#      if node.attrs['sd'] != 0:
-#        node[:] = (node - (node.attrs['AF'] * 2)) / node.attrs['sd']
-#
-#    if self.normalized:
-#      logging.info("-Data is already normalized")
-#      return
-#    logging.info("-Normalizing the data...")
-#    if not self.has_local_AF:
-#      self.compute_local_AF()
-#    #if self.center is None: 
-#    with h5py.File(self.store_name, 'a') as f:
-#      for chrom in self.keys:
-#        if chrom != 'meta':
-#          self.compute_decentralized_sd(chrom)
-#          if self.center is None:
-#            logging.info('--Normalizing chrom: ' + chrom)
-#          f[chrom].visititems(__normalize_centralized)
-#      f.attrs['normalized'] = True
-#    self.normalized = True
-
-
-  def PCA():
-    """Computes PCA"""
-    pass
-
 
 # define a class that inherits from above for the group that has centers 
 
 class Decentralized_DO(DO):
-  """Object representing a decentralized DO"""
+  """Data owner that can aid in computation of aggregate statistics"""
   
   def group_keys(self):
     with h5py.File(self.store_name, 'r') as f:
@@ -625,7 +569,7 @@ class Decentralized_DO(DO):
       curr_mat[blocks*mult:,:] += arr[blocks*mult:,:].dot(arr.T)
   
   def give_data(self,chroms, n):
-    """Should only be used to compute local PCA for comparison's sake. Even for that I'll probably write some other function."""
+    """Should only be used to compute PCA locally for comparison's sake."""
     arr = np.empty((self.n, n))
     with h5py.File(self.store_name, 'r') as f: 
       j = 0 
@@ -691,6 +635,8 @@ class Decentralized_DO(DO):
     return model.coef_
 
   def admm_update(self, pos, npcs, u, beta, rho, z0, stds,logistic, covp):
+    """Runs a regularized logistic regression with a penalty that draws the answer
+    closer to beta"""
     # If temp values are not set, set them up
     if self.load_snp:
       self.snp_loader(stds, npcs, covp, pos)
@@ -707,6 +653,8 @@ class Decentralized_DO(DO):
 #    return x
   
   def covLogit(self, pos, beta, stds, logistic, last=True):
+    """returns the variance covariance matrix for thelogistic regression
+    with the provided parameters. Used for Wald pvalues"""
     if self.load_snp:
       pcov = len(beta)
       npcs = pcov - len(pos)
@@ -816,6 +764,7 @@ class Decentralized_DO(DO):
     return sorted(indicies, key=lambda x: int(x))
 
   def store_eigs(self, sigma, v, chroms):
+    """Computes U's given the centralized sigma and V. Stores all the variables"""
     with h5py.File(self.store_name, 'a') as store:
       dset = store['meta']
       pca_sigma = dset.require_dataset('pca_sigma', shape=sigma.shape,
@@ -848,6 +797,7 @@ class Decentralized_DO(DO):
       pca_vt[:,:] = v
       pca_u = dset.require_dataset('pca_u', shape=u.shape, dtype=np.float32)
       pca_u[:,:] = u
+
   def set_normalized(self, value):
     with h5py.File(self.store_name, 'a') as store:
       store.attrs['normalized'] = value
@@ -864,7 +814,7 @@ class Decentralized_DO(DO):
 
 
 class Center(object):
-  """This class implements the central hub"""
+  """The central hub that drives and requires particular computations from each node."""
   def __init__(self, store_names, n_cores=1):
     self.store_names = store_names
     self.nDOs = len(store_names)
@@ -950,6 +900,8 @@ class Center(object):
           DO.HWE_filter(chrom, HWE, rate)
   
   def HWE_test(self, homor, het, homoa):
+    """HWE test (midpoint test). Other versions of HWE filter can be impelemented with the same information. 
+    This implementation should match PLINK1.9's implementation."""
     homc = max(homor, homoa)
     homr = min(homor, homoa)
     
@@ -1010,10 +962,6 @@ class Center(object):
     return p_hwe
 
 
-#    # Normalize
-#    for DO in self.DOs: 
-#      DO.normalize()
-  
   def correct_LD_prune(self, threshold, win_sz, step_sz=None):
     #TODO use local_LD_filter 
     def pruner(chrom, threshold, window):
@@ -1150,8 +1098,6 @@ class Center(object):
     to_PCA = np.zeros((n, n), dtype=np.float32)
     logging.info("Preparing covariance matrix of size {}".format(n))
     for DO in self.DOs:
-      #to_PCA += float(DO.n)/float(DO.n - 1) * DO.give_cov(chroms, indices, cov=False) # not sure if the prefactor is right but it's pretty much 1 anyways. Both give good answers.
-    #to_PCA /= float(self.n)
       DO.give_cov_pca(chroms, n, to_PCA, 1.0)# float(DO.n)/float(DO.n-1))
     if n_components is not None:
       m = min(self.n, n)
@@ -1194,8 +1140,8 @@ class Center(object):
   def run_regression(self, numPCs, n_iters, warm_start=True, chroms=[], sites=None, kind='ADMM',
       verbose=False, out_file="d_beta.txt"):
 
-    """Dispatches to regression algorithm"""
     def _regression(kind, verbose, **kwargs):
+      """Dispatches to regression algorithm"""
       if kind == 'ADMM':
         if verbose:
           return self._ADMM_verbose(**kwargs)
@@ -1207,10 +1153,6 @@ class Center(object):
 
     logging.info("-Running regression")
     DOs = self.DOs
-#    X = np.empty((self.n, numPCs+1))
-#    Y = np.empty((self.n, 1))
-#    model = LogisticRegression(fit_intercept=False,  solver='newton-cg',
-#        tol=1e-5, C=1e5)
 
     kwargs = {"rho": 10.0, "max_iters":n_iters, "alpha":1.2,
       "npcs":numPCs, "mu":0.0}#self.n * 1e-9}
@@ -1241,7 +1183,7 @@ class Center(object):
     pbar = tqdm.tqdm(total=num_g)
     counter, all_betas, warm_beta = 0, [], np.zeros((covp, 1))
 
-    # Run regression with PC's only to get the baseline likelihood 
+    # Run regression with PC's only one time, to get the likelihood for the smaller model
     kwargs['pos'] = []
     kwargs["beta"] = warm_beta[1:]
     pc_beta = _regression(kind, False, **kwargs)
@@ -1258,7 +1200,8 @@ class Center(object):
       pval = np.empty((covp + 2, 1))
     else:
       pval = np.empty((covp + 2, n_iters+1))
-    
+ 
+    # Run regression for everything else and compute the log likelihood difference/Wald Pvalues
     with open(out_file, 'w') as fout:
       for chrom in chroms:
         if chrom == 'meta':
@@ -1303,8 +1246,7 @@ class Center(object):
 
   def _ADMM(self, pos, npcs, rho, beta, alpha=1., max_iters=10, mu=0.0, stds=1, #1e-9, stds = 1,
       logistic=True, verbose=True): # mu is really self.n * mu
-    """Performs ADMM regression. So far, only logistic regression is implemented.
-    Performs the regression on the centralized data."""
+    """Performs ADMM regression. So far, only logistic regression is implemented."""
     DOs = self.DOs
     covp = len(pos) + npcs
     K = len(DOs)
@@ -1365,7 +1307,8 @@ class Center(object):
 
   def _AVG(self, pos, npcs, stds = 1, logistic=True, verbose=True, **kwargs): 
     """Performs Average regression. So far, only logistic regression is implemented.
-    Performs the regression on the centralized data."""
+    Performs the regression on de-centralized data. This simply averages all the results,
+    for the actual analysis, we used inverse variance weighted averaging FE model."""
     covp = len(pos) + npcs
     DOs = self.DOs
     N = float(self.n)
