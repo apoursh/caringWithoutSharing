@@ -2,7 +2,7 @@
 
 
 A complete pipeline for performing GWAS in a decentralized fashion. We perform QC, PCA and logistic regression in two scenarios. In scenario 1, we randomly split the data into five silos. In scenario 2, we split the data based on case control status. In both scenarios, we compare the results to a centralized analysis and demonstrate that almost perfect numerical agreement can be achieved. We furthermore, investigate our performance on extremely rare alleles and show that out pipeline can achieve the accuracy of a centralized pipeline when the allele count per silo is too low for meta studies to perform well.
-You can find our preprint <a href="noLinkYet">here</a>
+You can find our preprint <a href="noLinkYet">here</a>. This work is currently under submission. 
 
 
 ## Included files: 
